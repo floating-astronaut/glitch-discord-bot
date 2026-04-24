@@ -1,0 +1,17 @@
+[Unit]
+Description=Glitch Discord bot (agent control plane)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/support/glitch-discord-bot
+EnvironmentFile=/home/support/.config/glitch-discord/env
+ExecStart=/home/support/glitch-discord-bot/.venv/bin/python /home/support/glitch-discord-bot/bot.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
