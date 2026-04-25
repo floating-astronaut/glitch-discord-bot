@@ -235,6 +235,14 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     log.info("Logged in as %s (id=%s) in %d guild(s)", bot.user, bot.user.id, len(bot.guilds))
+    # Wire the Glitch Budz sales-agent HITL plugin if installed in this venv.
+    try:
+        import sales_agent_integration as sa_plugin
+        await sa_plugin.setup(bot)
+    except ImportError:
+        log.info("sales_agent_integration not installed — skipping plugin")
+    except Exception:
+        log.exception("sales_agent_integration setup failed")
 
 
 # ----- Action approval interactions ----------------------------------------
@@ -292,6 +300,19 @@ async def on_interaction(interaction: discord.Interaction):
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
         return
+
+    # First, give the sales-agent plugin a chance to consume the reaction
+    # (it owns the embeds whose footer starts with `draft `). Returns True
+    # if it handled it; in that case we skip the host's Task: branch.
+    try:
+        import sales_agent_integration as sa_plugin
+        if await sa_plugin.handle_reaction(payload):
+            return
+    except ImportError:
+        pass
+    except Exception:
+        log.exception("sales_agent_integration.handle_reaction failed")
+
     if str(payload.emoji) not in ("✅", "❌"):
         return
     channel = bot.get_channel(payload.channel_id)
