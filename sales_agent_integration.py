@@ -227,22 +227,74 @@ async def _post_pending() -> None:
 
     draft_repo = DraftRepo(pool.pool())
     lead_repo = LeadRepo(pool.pool())
+
+    # 1. Post embeds for pending drafts that haven't been posted yet.
     pending = await draft_repo.pending(limit=50)
     fresh = [d for d in pending if d.discord_message_id is None]
-    if not fresh:
-        return
+    if fresh:
+        logger.info("posting %d new drafts", len(fresh))
+        for d in fresh:
+            lead = await lead_repo.get(d.lead_id)
+            if lead is None:
+                continue
+            try:
+                msg = await _state.channel.send(embed=draft_embed(d, lead))
+                for emoji in RECOGNISED_REACTIONS:
+                    await msg.add_reaction(emoji)
+                await draft_repo.attach_discord(
+                    d.id, channel_id=msg.channel.id, message_id=msg.id,
+                )
+            except Exception:
+                logger.exception("failed to post draft %s", d.id)
 
-    logger.info("posting %d new drafts", len(fresh))
-    for d in fresh:
-        lead = await lead_repo.get(d.lead_id)
-        if lead is None:
-            continue
+    # 2. Sweep stale embeds: drafts that were posted but then transitioned
+    #    out of pending (superseded by a redraft, approved/rejected via a
+    #    different path, etc.). Re-edit the embed so its color + state
+    #    line match the DB. Without this sweep, an embed posted as
+    #    "pending" stays visually blue forever even after the row was
+    #    superseded — operator sees a stale approval queue.
+    await _resync_stale_embeds(draft_repo, lead_repo)
+
+
+async def _resync_stale_embeds(draft_repo: DraftRepo, lead_repo: LeadRepo) -> None:
+    """Find drafts whose Discord embed shows a state that no longer matches
+    the DB row, and re-render them in place."""
+    if _state.channel is None:
+        return
+    async with pool.pool().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, lead_id, approval_state, discord_message_id
+            FROM sales_agent.email_drafts
+            WHERE discord_message_id IS NOT NULL
+              AND approval_state <> 'pending'
+              AND COALESCE(approved_at, created_at) > now() - INTERVAL '24 hours'
+            LIMIT 50
+            """
+        )
+    if not rows:
+        return
+    for r in rows:
         try:
-            msg = await _state.channel.send(embed=draft_embed(d, lead))
-            for emoji in RECOGNISED_REACTIONS:
-                await msg.add_reaction(emoji)
-            await draft_repo.attach_discord(
-                d.id, channel_id=msg.channel.id, message_id=msg.id,
-            )
+            msg = await _state.channel.fetch_message(int(r["discord_message_id"]))
         except Exception:
-            logger.exception("failed to post draft %s", d.id)
+            continue  # message deleted or no longer accessible
+        # Skip if the embed footer already reflects the new state (cheap
+        # idempotency check — formatter writes "State: <state>" in fields).
+        already_synced = any(
+            f.value and r["approval_state"].lower() in f.value.lower()
+            for f in (msg.embeds[0].fields if msg.embeds else [])
+        )
+        if already_synced:
+            continue
+        full_draft = await draft_repo.get(r["id"])
+        lead = await lead_repo.get(r["lead_id"])
+        if full_draft and lead:
+            try:
+                await msg.edit(embed=draft_embed(full_draft, lead))
+                logger.info(
+                    "resynced embed for draft %s → %s",
+                    r["id"], r["approval_state"],
+                )
+            except Exception:
+                logger.exception("resync failed for draft %s", r["id"])
