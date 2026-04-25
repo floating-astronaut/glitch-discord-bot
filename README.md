@@ -2,13 +2,29 @@
 
 Agent operations control plane for the Glitch Discord server.
 
+## What this does
+
+Thin guild-side adapter so agent processes (`glitch-grow-ai-ads-agent`,
+others) can stay transport-agnostic. For every channel in `AGENT_CHANNELS`:
+
+1. **Inbound messages** are written as JSON to
+   `/home/support/.glitch-discord/inbox/<channel>/<msg_id>.json`. The
+   agent polls those JSONs, dispatches the contained `/cmd`, and posts
+   the reply back via Discord REST.
+2. **Button-click interactions** (custom_id starting with `act:`) are
+   written to `/home/support/.glitch-discord/inbox/_interactions/`. The
+   agent's shared resolver consumes them for HITL approve/reject of
+   action proposals — same DB row whether the click came from Discord
+   or Telegram (first-click-wins).
+
 ## Layout
 
-- `bot.py` — discord.py client with guild slash commands
-- `glitch-discord-bot.service` — systemd user unit
+- `bot.py` — discord.py client: guild slash commands + on_message inbox
+  + on_interaction approval-button handler
+- `glitch-discord-bot.service` — systemd unit
 - Secrets live at `/home/support/.config/glitch-discord/env` (mode 600, not in git)
 
-## Commands
+## Slash commands (guild)
 
 | Command | Purpose |
 | --- | --- |
@@ -22,6 +38,11 @@ Agent operations control plane for the Glitch Discord server.
 | `/whoami` | Show invoking user's roles |
 
 Reactions ✅ / ❌ on a `Task:` embed trigger approval/cancel notices.
+
+The agent's own `/help`, `/insights`, `/meta_audit`, `/port_meta_to_tiktok`
+etc. are NOT registered here as slash commands — they're plain
+text-prefixed commands the agent's inbox consumer parses out of normal
+channel messages.
 
 ## Run (foreground)
 
