@@ -237,6 +237,57 @@ async def on_ready():
     log.info("Logged in as %s (id=%s) in %d guild(s)", bot.user, bot.user.id, len(bot.guilds))
 
 
+# ----- Action approval interactions ----------------------------------------
+# Button clicks on agent-action proposals (custom_id starts with "act:")
+# are written here as JSON files for the ads-agent consumer to process.
+# We ack the interaction with a deferred-ephemeral response so Discord is
+# happy within the 3s deadline; the consumer handles the real DB work
+# + the eventual message edit.
+
+INTERACTIONS_DIR = Path("/home/support/.glitch-discord/inbox/_interactions")
+INTERACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # Only handle component interactions whose custom_id is one of ours.
+    if interaction.type != discord.InteractionType.component:
+        return
+    custom_id = (interaction.data or {}).get("custom_id", "") if interaction.data else ""
+    if not custom_id.startswith("act:"):
+        return
+
+    # Defer ephemerally — gives the consumer up to 15 minutes to follow up;
+    # we won't actually follow up via the interaction, the consumer will
+    # edit the original message directly. The defer is purely so Discord
+    # doesn't show "interaction failed" to the clicker.
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=False)
+    except discord.errors.InteractionResponded:
+        pass
+    except Exception as e:
+        log.warning("interaction defer failed: %s", e)
+
+    user = interaction.user
+    payload = {
+        "interaction_id": str(interaction.id),
+        "custom_id": custom_id,
+        "channel_id": str(interaction.channel_id) if interaction.channel_id else None,
+        "guild_id":   str(interaction.guild_id)   if interaction.guild_id else None,
+        "message_id": str(interaction.message.id) if interaction.message else None,
+        "user_id":    str(user.id) if user else None,
+        "user_name":  (user.name if user else None),
+        "user_display": (user.display_name if hasattr(user, "display_name") else None),
+        "timestamp":  interaction.created_at.isoformat() if interaction.created_at else None,
+    }
+    path = INTERACTIONS_DIR / f"{int(time.time()*1000)}-{interaction.id}.json"
+    path.write_text(json.dumps(payload, indent=2))
+    log.info(
+        "interaction: %s clicked %s on msg %s → %s",
+        payload["user_name"], custom_id, payload["message_id"], path.name,
+    )
+
+
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.user_id == bot.user.id:
