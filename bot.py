@@ -244,6 +244,15 @@ async def on_ready():
     except Exception:
         log.exception("sales_agent_integration setup failed")
 
+    # Wire the glitch-social-media-agent plugin (comment / mention HITL).
+    try:
+        import social_media_agent_integration as sma_plugin
+        await sma_plugin.setup(bot)
+    except ImportError:
+        log.info("social_media_agent_integration not installed — skipping plugin")
+    except Exception:
+        log.exception("social_media_agent_integration setup failed")
+
 
 # ----- Action approval interactions ----------------------------------------
 # Button clicks on agent-action proposals (custom_id starts with "act:")
@@ -312,6 +321,15 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         pass
     except Exception:
         log.exception("sales_agent_integration.handle_reaction failed")
+
+    # Then the social-media-agent plugin (footer prefix = `comment_reply `).
+    try:
+        import social_media_agent_integration as sma_plugin
+        await sma_plugin.on_raw_reaction_add(payload)
+    except ImportError:
+        pass
+    except Exception:
+        log.exception("social_media_agent_integration.on_raw_reaction_add failed")
 
     if str(payload.emoji) not in ("✅", "❌"):
         return
