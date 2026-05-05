@@ -72,6 +72,17 @@ class GlitchBot(discord.Client):
 
 bot = GlitchBot()
 
+# ── Community-server handlers ────────────────────────────────────────────
+# Optional. Activated only when COMMUNITY_GUILD_ID is set in the env.
+# All community-guild logic lives in community.py and is strictly scoped
+# to the new community guild — the HITL/operator behaviour above stays
+# untouched on its original guild.
+try:
+    import community
+    community.setup(bot)
+except ImportError as e:
+    log.info("community module not loaded: %s", e)
+
 
 # ---------- helpers ----------
 
